@@ -32,6 +32,11 @@ function initMap() {
       store.addWaypoint(e.latlng.lat, e.latlng.lng);
     }
   });
+
+  drawNoFlyZones();
+  drawWaypoints();
+  drawRoute();
+  drawSimDrone();
 }
 
 function drawNoFlyZones() {

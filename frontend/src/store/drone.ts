@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import type { Waypoint, NoFlyZone, TerrainPoint, FlightPlan, DroneConfig, NoFlyZoneImpact } from '../types';
 import {
   aStarPathfind,
@@ -14,16 +14,47 @@ import {
   analyzeAllNoFlyZoneImpacts,
 } from '../utils/pathfinding';
 
+const STORAGE_KEY = 'drone-planner-state-v1';
+
+interface PersistedState {
+  waypoints: Waypoint[];
+  currentPlan: FlightPlan | null;
+  selectedAlgorithm: 'astar' | 'rrt';
+  selectedZoneId: string | null;
+  simProgress: number;
+}
+
+function saveToStorage(state: PersistedState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.warn('Failed to save state to localStorage:', e);
+  }
+}
+
+function loadFromStorage(): PersistedState | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedState;
+  } catch (e) {
+    console.warn('Failed to load state from localStorage:', e);
+    return null;
+  }
+}
+
 export const useDroneStore = defineStore('drone', () => {
-  const waypoints = ref<Waypoint[]>([]);
+  const persisted = loadFromStorage();
+
+  const waypoints = ref<Waypoint[]>(persisted?.waypoints ?? []);
   const noFlyZones = ref<NoFlyZone[]>([]);
   const terrainData = ref<TerrainPoint[]>([]);
-  const currentPlan = ref<FlightPlan | null>(null);
-  const selectedAlgorithm = ref<'astar' | 'rrt'>('astar');
+  const currentPlan = ref<FlightPlan | null>(persisted?.currentPlan ?? null);
+  const selectedAlgorithm = ref<'astar' | 'rrt'>(persisted?.selectedAlgorithm ?? 'astar');
   const isSimulating = ref(false);
-  const simProgress = ref(0);
+  const simProgress = ref(persisted?.simProgress ?? 0);
   const mapCenter = ref<[number, number]>([39.9, 116.4]);
-  const selectedZoneId = ref<string | null>(null);
+  const selectedZoneId = ref<string | null>(persisted?.selectedZoneId ?? null);
 
   const droneConfig = ref<DroneConfig>({
     maxAltitude: 500,
@@ -115,6 +146,29 @@ export const useDroneStore = defineStore('drone', () => {
     selectedZoneId.value = zoneId;
   }
 
+  function clearPersistedState() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      console.warn('Failed to clear persisted state:', e);
+    }
+  }
+
+  // ─── Auto-persist watches ─────────────────────────────────────────────────
+  watch(
+    [waypoints, currentPlan, selectedAlgorithm, selectedZoneId, simProgress],
+    () => {
+      saveToStorage({
+        waypoints: waypoints.value,
+        currentPlan: currentPlan.value,
+        selectedAlgorithm: selectedAlgorithm.value,
+        selectedZoneId: selectedZoneId.value,
+        simProgress: simProgress.value,
+      });
+    },
+    { deep: true }
+  );
+
   // ─── Computed ─────────────────────────────────────────────────────────────
   const selectedZone = computed<NoFlyZone | null>(() => {
     if (!selectedZoneId.value) return null;
@@ -195,5 +249,6 @@ export const useDroneStore = defineStore('drone', () => {
     exportPlan,
     updatePlan,
     selectZone,
+    clearPersistedState,
   };
 });
