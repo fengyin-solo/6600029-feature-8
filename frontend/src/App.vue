@@ -3,6 +3,7 @@ import { onMounted } from 'vue';
 import MapView from './components/MapView.vue';
 import TerrainProfile from './components/TerrainProfile.vue';
 import FlightStats from './components/FlightStats.vue';
+import NoFlyZoneImpact from './components/NoFlyZoneImpact.vue';
 import { useDroneStore } from './store/drone';
 
 const store = useDroneStore();
@@ -116,6 +117,9 @@ function handlePlanRoute() {
             🗑 清除航线
           </button>
         </div>
+
+        <!-- No-fly zone impact -->
+        <NoFlyZoneImpact />
 
         <!-- Flight stats -->
         <FlightStats />

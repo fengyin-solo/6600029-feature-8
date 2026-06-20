@@ -3,12 +3,13 @@ import { onMounted, onUnmounted, ref, watch, nextTick } from 'vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useDroneStore } from '../store/drone';
+import { getRiskColor } from '../utils/pathfinding';
 
 const store = useDroneStore();
 const mapContainer = ref<HTMLElement>();
 let map: L.Map | null = null;
 let waypointLayer: L.LayerGroup | null = null;
-let routeLayer: L.Polyline | null = null;
+let routeLayer: L.LayerGroup | null = null;
 let zoneLayer: L.LayerGroup | null = null;
 let droneMarker: L.CircleMarker | null = null;
 
@@ -24,6 +25,7 @@ function initMap() {
 
   waypointLayer = L.layerGroup().addTo(map);
   zoneLayer = L.layerGroup().addTo(map);
+  routeLayer = L.layerGroup().addTo(map);
 
   map.on('click', (e: L.LeafletMouseEvent) => {
     if (addMode.value) {
@@ -39,15 +41,23 @@ function drawNoFlyZones() {
     const color =
       zone.type === 'airport' ? '#ef4444' :
       zone.type === 'military' ? '#f97316' : '#a855f7';
-    L.circle([zone.center[0], zone.center[1]], {
+    const isSelected = store.selectedZoneId === zone.id;
+    const circle = L.circle([zone.center[0], zone.center[1]], {
       radius: zone.radius,
       color,
       fillColor: color,
-      fillOpacity: 0.15,
-      weight: 2,
-    })
-      .bindPopup(`<b>${zone.name}</b><br>Type: ${zone.type}<br>Radius: ${zone.radius}m`)
-      .addTo(zoneLayer);
+      fillOpacity: isSelected ? 0.3 : 0.15,
+      weight: isSelected ? 4 : 2,
+    });
+    circle.on('click', () => {
+      if (store.selectedZoneId === zone.id) {
+        store.selectZone(null);
+      } else {
+        store.selectZone(zone.id);
+      }
+    });
+    circle.bindPopup(`<b>${zone.name}</b><br>类型: ${zone.type}<br>半径: ${zone.radius}m`);
+    circle.addTo(zoneLayer);
   }
 }
 
@@ -81,31 +91,73 @@ function drawWaypoints() {
 }
 
 function drawRoute() {
-  if (routeLayer && map) {
-    map.removeLayer(routeLayer);
-    routeLayer = null;
+  if (routeLayer) {
+    routeLayer.clearLayers();
+  } else {
+    if (map) {
+      routeLayer = L.layerGroup().addTo(map);
+    }
   }
-  if (store.waypoints.length < 2 || !map) return;
+  if (!routeLayer || store.waypoints.length < 2 || !map) return;
 
-  const latlngs = store.waypoints.map((w) => [w.lat, w.lng] as [number, number]);
-
-  // Check near obstacles for coloring
-  let hasDanger = false;
-  for (const wp of store.waypoints) {
-    for (const zone of store.noFlyZones) {
-      const d = Math.sqrt(
-        (wp.lat - zone.center[0]) ** 2 + (wp.lng - zone.center[1]) ** 2
-      ) * 111000;
-      if (d < zone.radius * 1.5) hasDanger = true;
+  const selectedImpact = store.selectedZoneImpact;
+  const affectedSegmentIndices = new Set<number>(
+    selectedImpact ? selectedImpact.affectedSegments.map((s) => s.segmentIndex) : []
+  );
+  const segmentRiskMap = new Map<number, string>();
+  if (selectedImpact) {
+    for (const seg of selectedImpact.affectedSegments) {
+      segmentRiskMap.set(seg.segmentIndex, getRiskColor(seg.riskLevel));
     }
   }
 
-  routeLayer = L.polyline(latlngs, {
-    color: hasDanger ? '#ef4444' : '#22c55e',
-    weight: 3,
-    opacity: 0.8,
-    dashArray: hasDanger ? '8,4' : undefined,
-  }).addTo(map);
+  for (let i = 0; i < store.waypoints.length - 1; i++) {
+    const wp1 = store.waypoints[i];
+    const wp2 = store.waypoints[i + 1];
+    const latlngs: [number, number][] = [[wp1.lat, wp1.lng], [wp2.lat, wp2.lng]];
+
+    const isAffected = store.selectedZoneId && affectedSegmentIndices.has(i);
+    const riskColor = segmentRiskMap.get(i);
+
+    let color = '#22c55e';
+    let weight = 3;
+    let dashArray: string | undefined = undefined;
+    let opacity = 0.8;
+
+    if (store.selectedZoneId) {
+      if (isAffected && riskColor) {
+        color = riskColor;
+        weight = 6;
+        opacity = 1;
+        if (riskColor === '#dc2626') dashArray = '10,5';
+      } else {
+        color = '#475569';
+        opacity = 0.4;
+      }
+    } else {
+      let hasDanger = false;
+      for (const zone of store.noFlyZones) {
+        const d1 = Math.sqrt(
+          (wp1.lat - zone.center[0]) ** 2 + (wp1.lng - zone.center[1]) ** 2
+        ) * 111000;
+        const d2 = Math.sqrt(
+          (wp2.lat - zone.center[0]) ** 2 + (wp2.lng - zone.center[1]) ** 2
+        ) * 111000;
+        if (d1 < zone.radius * 1.5 || d2 < zone.radius * 1.5) hasDanger = true;
+      }
+      if (hasDanger) {
+        color = '#ef4444';
+        dashArray = '8,4';
+      }
+    }
+
+    L.polyline(latlngs, {
+      color,
+      weight,
+      opacity,
+      dashArray,
+    }).addTo(routeLayer);
+  }
 }
 
 function drawSimDrone() {
@@ -132,12 +184,16 @@ function drawSimDrone() {
   }
 }
 
-watch(() => store.waypoints.length, () => {
+watch(() => store.waypoints, () => {
   drawWaypoints();
   drawRoute();
-});
+}, { deep: true });
 
-watch(() => store.noFlyZones.length, drawNoFlyZones);
+watch(() => store.noFlyZones, drawNoFlyZones, { deep: true });
+watch(() => store.selectedZoneId, () => {
+  drawNoFlyZones();
+  drawRoute();
+});
 watch(() => store.simProgress, drawSimDrone);
 
 onMounted(() => {

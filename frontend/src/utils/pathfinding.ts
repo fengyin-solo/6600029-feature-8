@@ -1,4 +1,4 @@
-import type { Waypoint, NoFlyZone, TerrainPoint, FlightPlan, DroneConfig } from '../types';
+import type { Waypoint, NoFlyZone, TerrainPoint, FlightPlan, DroneConfig, NoFlyZoneImpact, AffectedSegment, RiskLevel } from '../types';
 
 // ─── Haversine distance ─────────────────────────────────────────────────────
 export function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -346,6 +346,149 @@ ${coords}
 ${placemarks}
   </Document>
 </kml>`;
+}
+
+// ─── No-Fly Zone Impact Analysis ────────────────────────────────────────────
+export function pointToSegmentDistance(
+  pLat: number, pLng: number,
+  aLat: number, aLng: number,
+  bLat: number, bLng: number
+): { distance: number; closestLat: number; closestLng: number } {
+  const dx = bLat - aLat;
+  const dy = bLng - aLng;
+  const lenSq = dx * dx + dy * dy;
+
+  if (lenSq === 0) {
+    return {
+      distance: haversine(pLat, pLng, aLat, aLng),
+      closestLat: aLat,
+      closestLng: aLng,
+    };
+  }
+
+  let t = ((pLat - aLat) * dx + (pLng - aLng) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  const closestLat = aLat + t * dx;
+  const closestLng = aLng + t * dy;
+
+  return {
+    distance: haversine(pLat, pLng, closestLat, closestLng),
+    closestLat,
+    closestLng,
+  };
+}
+
+export function assessRiskLevel(
+  minDistance: number,
+  zoneRadius: number,
+  zoneType: NoFlyZone['type']
+): RiskLevel {
+  const ratio = minDistance / zoneRadius;
+  const typeMultiplier =
+    zoneType === 'airport' ? 1.5 :
+    zoneType === 'military' ? 1.2 : 1.0;
+
+  if (minDistance < zoneRadius) return 'critical';
+  if (ratio < 1.1 * typeMultiplier) return 'high';
+  if (ratio < 1.3 * typeMultiplier) return 'medium';
+  if (ratio < 1.6 * typeMultiplier) return 'low';
+  return 'none';
+}
+
+export function getHighestRisk(levels: RiskLevel[]): RiskLevel {
+  const order: RiskLevel[] = ['critical', 'high', 'medium', 'low', 'none'];
+  for (const l of order) {
+    if (levels.includes(l)) return l;
+  }
+  return 'none';
+}
+
+export function getRiskDescription(level: RiskLevel): string {
+  const desc: Record<RiskLevel, string> = {
+    critical: '航线严重侵入禁飞区，必须立即调整！',
+    high: '航线过于接近禁飞区边界，存在较高违规风险。',
+    medium: '航线接近禁飞区缓冲带，建议保持更远距离。',
+    low: '航线在安全范围内，但需注意禁飞区周边空域。',
+    none: '航线安全，不受该禁飞区影响。',
+  };
+  return desc[level];
+}
+
+export function getRiskColor(level: RiskLevel): string {
+  const colors: Record<RiskLevel, string> = {
+    critical: '#dc2626',
+    high: '#f97316',
+    medium: '#eab308',
+    low: '#22c55e',
+    none: '#64748b',
+  };
+  return colors[level];
+}
+
+export function getZoneTypeLabel(type: NoFlyZone['type']): string {
+  const labels: Record<NoFlyZone['type'], string> = {
+    airport: '机场禁区',
+    military: '军事管制区',
+    restricted: '限制飞行区',
+  };
+  return labels[type];
+}
+
+export function analyzeNoFlyZoneImpact(
+  zone: NoFlyZone,
+  waypoints: Waypoint[]
+): NoFlyZoneImpact {
+  const affectedSegments: AffectedSegment[] = [];
+  let totalAffectedDistance = 0;
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const wp1 = waypoints[i];
+    const wp2 = waypoints[i + 1];
+
+    const { distance } = pointToSegmentDistance(
+      zone.center[0], zone.center[1],
+      wp1.lat, wp1.lng,
+      wp2.lat, wp2.lng
+    );
+
+    const riskLevel = assessRiskLevel(distance, zone.radius, zone.type);
+
+    if (riskLevel !== 'none') {
+      const segLen = haversine(wp1.lat, wp1.lng, wp2.lat, wp2.lng);
+      totalAffectedDistance += segLen;
+
+      affectedSegments.push({
+        segmentIndex: i,
+        startWaypointId: wp1.id,
+        endWaypointId: wp2.id,
+        startWaypointName: `WP${i + 1}`,
+        endWaypointName: `WP${i + 2}`,
+        minDistance: distance,
+        penetrateDistance: Math.max(0, zone.radius - distance),
+        riskLevel,
+      });
+    }
+  }
+
+  const overallRisk = getHighestRisk(affectedSegments.map((s) => s.riskLevel));
+
+  return {
+    zoneId: zone.id,
+    zoneName: zone.name,
+    zoneType: zone.type,
+    affectedSegments,
+    overallRiskLevel: overallRisk,
+    totalAffectedDistance,
+    description: getRiskDescription(overallRisk),
+  };
+}
+
+export function analyzeAllNoFlyZoneImpacts(
+  zones: NoFlyZone[],
+  waypoints: Waypoint[]
+): NoFlyZoneImpact[] {
+  return zones.map((z) => analyzeNoFlyZoneImpact(z, waypoints));
 }
 
 // ─── Mock Data ──────────────────────────────────────────────────────────────

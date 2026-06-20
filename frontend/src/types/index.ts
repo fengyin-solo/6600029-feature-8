@@ -37,3 +37,26 @@ export interface DroneConfig {
   consumptionRate: number;  // mAh/min
   safeDistance: number;     // meters from obstacles
 }
+
+export type RiskLevel = 'critical' | 'high' | 'medium' | 'low' | 'none';
+
+export interface AffectedSegment {
+  segmentIndex: number;
+  startWaypointId: string;
+  endWaypointId: string;
+  startWaypointName: string;
+  endWaypointName: string;
+  minDistance: number;
+  penetrateDistance: number;
+  riskLevel: RiskLevel;
+}
+
+export interface NoFlyZoneImpact {
+  zoneId: string;
+  zoneName: string;
+  zoneType: NoFlyZone['type'];
+  affectedSegments: AffectedSegment[];
+  overallRiskLevel: RiskLevel;
+  totalAffectedDistance: number;
+  description: string;
+}

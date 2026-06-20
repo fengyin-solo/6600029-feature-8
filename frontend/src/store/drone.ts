@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { Waypoint, NoFlyZone, TerrainPoint, FlightPlan, DroneConfig } from '../types';
+import type { Waypoint, NoFlyZone, TerrainPoint, FlightPlan, DroneConfig, NoFlyZoneImpact } from '../types';
 import {
   aStarPathfind,
   rrtPathfind,
@@ -10,6 +10,8 @@ import {
   exportKML,
   mockNoFlyZones,
   mockTerrainData,
+  analyzeNoFlyZoneImpact,
+  analyzeAllNoFlyZoneImpacts,
 } from '../utils/pathfinding';
 
 export const useDroneStore = defineStore('drone', () => {
@@ -21,6 +23,7 @@ export const useDroneStore = defineStore('drone', () => {
   const isSimulating = ref(false);
   const simProgress = ref(0);
   const mapCenter = ref<[number, number]>([39.9, 116.4]);
+  const selectedZoneId = ref<string | null>(null);
 
   const droneConfig = ref<DroneConfig>({
     maxAltitude: 500,
@@ -108,7 +111,25 @@ export const useDroneStore = defineStore('drone', () => {
     return exportKML(currentPlan.value);
   }
 
+  function selectZone(zoneId: string | null) {
+    selectedZoneId.value = zoneId;
+  }
+
   // ─── Computed ─────────────────────────────────────────────────────────────
+  const selectedZone = computed<NoFlyZone | null>(() => {
+    if (!selectedZoneId.value) return null;
+    return noFlyZones.value.find((z) => z.id === selectedZoneId.value) || null;
+  });
+
+  const selectedZoneImpact = computed<NoFlyZoneImpact | null>(() => {
+    if (!selectedZone.value) return null;
+    return analyzeNoFlyZoneImpact(selectedZone.value, waypoints.value);
+  });
+
+  const allZoneImpacts = computed<NoFlyZoneImpact[]>(() => {
+    return analyzeAllNoFlyZoneImpacts(noFlyZones.value, waypoints.value);
+  });
+
   const totalDistance = computed(() => {
     if (!currentPlan.value) return 0;
     return currentPlan.value.totalDistance;
@@ -156,6 +177,10 @@ export const useDroneStore = defineStore('drone', () => {
     isSimulating,
     simProgress,
     mapCenter,
+    selectedZoneId,
+    selectedZone,
+    selectedZoneImpact,
+    allZoneImpacts,
     totalDistance,
     estimatedTime,
     batteryPercent,
@@ -169,5 +194,6 @@ export const useDroneStore = defineStore('drone', () => {
     loadMockData,
     exportPlan,
     updatePlan,
+    selectZone,
   };
 });
